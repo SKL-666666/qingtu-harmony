@@ -37,9 +37,9 @@
 
 ## 运行环境 / Requirements
 
-- **HarmonyOS**: 5.0.5 Release 及以上 / 5.0.5 Release or later
-- **DevEco Studio**: 5.0.5 Release 及以上 / 5.0.5 Release or later
-- **HarmonyOS SDK**: 5.0.5 Release 及以上 / 5.0.5 Release or later
+- **HarmonyOS**: 6.1 Release 及以上（API 23+）/ 6.1 Release or later (API 23+)
+- **DevEco Studio**: 6.1 Release 及以上 / 6.1 Release or later
+- **HarmonyOS SDK**: 6.1 Release 及以上 / 6.1 Release or later
 - **设备类型 / Device types**: 手机 Phone / 平板 Tablet
 
 ---
