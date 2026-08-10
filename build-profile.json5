@@ -1,0 +1,83 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\yifen\\.ohos\\config\\default_UsingImageProcessingToProcessImages_ugTh-b-RlEdHLA_cOwrNPeWc6aqLhj5Mvabay-JRnoQ=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "00000019819FF1A7DF6CC4887ED903008C3330D77108C346DCF599CC1BB2945F9C98C03DAC4CFE6110",
+          "profile": "C:\\Users\\yifen\\.ohos\\config\\default_UsingImageProcessingToProcessImages_ugTh-b-RlEdHLA_cOwrNPeWc6aqLhj5Mvabay-JRnoQ=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\yifen\\.ohos\\config\\default_UsingImageProcessingToProcessImages_ugTh-b-RlEdHLA_cOwrNPeWc6aqLhj5Mvabay-JRnoQ=.p12",
+          "storePassword": "000000190A9D844A905C0C1E5D2591E475C519E9C8EA24CE82CC7795799A5333CADCA21C8009377B46"
+        }
+      },
+      {
+        "name": "qingtu",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\yifen\\.ohos\\config\\qingtu_UsingImageProcessingToProcessImages_ugTh-b-RlEdHLA_cOwrNPeWc6aqLhj5Mvabay-JRnoQ=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001A32D2247F25F776259918F59DDE824A0B993BA7DDAFB114A7901084EF43663A08F33F8C049FDE",
+          "profile": "C:\\Users\\yifen\\.ohos\\config\\qingtu_UsingImageProcessingToProcessImages_ugTh-b-RlEdHLA_cOwrNPeWc6aqLhj5Mvabay-JRnoQ=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\yifen\\.ohos\\config\\qingtu_UsingImageProcessingToProcessImages_ugTh-b-RlEdHLA_cOwrNPeWc6aqLhj5Mvabay-JRnoQ=.p12",
+          "storePassword": "0000001ABCC225DFA3EC9A659241B8237FA6CEF62F9E6D165925DC454636981BEC914A5F69D78A13060E"
+        }
+      },
+      {
+        "name": "release",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:/Users/yifen/DevEcoStudioProjects/qingtu.cer",
+          "keyAlias": "qingtumiyin",
+          "keyPassword": "00000019ADD86430617BAC341EE762EAA1B7D596D441302D02CE922D4210BCA596FD6B4F47714D7D7F",
+          "profile": "./.trae/qingtu2Release.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:/Users/yifen/DevEcoStudioProjects/qingtu.p12",
+          "storePassword": "000000196570E020E453C5E24481E5A4A7A444587EDF5DE1369BBBB3CE4440DBCDA8CA647F2E3B2AAB"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "release",
+        "compatibleSdkVersion": "6.1.0(23)",
+        "targetSdkVersion": "6.1.0(23)",
+        "runtimeOS": "HarmonyOS",
+        "bundleName": "app.qingtu.tool",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug",
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

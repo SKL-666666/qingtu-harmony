@@ -1,0 +1,28 @@
+# ===== DevEco Studio / HarmonyOS =====
+/build/
+**/build/
+.hvigor/
+.idea/
+.cxx/
+.preview/
+.appanalyzer/
+oh_modules/
+**/oh_modules/
+local.properties
+.test/
+*.log
+
+# ===== IDE / Editor =====
+.vscode/
+*.iml
+
+# ===== 敏感文件 (签名证书等) =====
+.trae/
+*.p7b
+*.p12
+*.cer
+*.pem
+
+# ===== OS / misc =====
+.DS_Store
+Thumbs.db
