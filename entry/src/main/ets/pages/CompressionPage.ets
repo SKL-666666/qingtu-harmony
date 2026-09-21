@@ -87,7 +87,7 @@ export struct CompressionTab {
 
   /**
    * 压缩图片 - 二分法查找最优质量
-   * DMA PixelMap 的 cloneSync() 结果可能无效,改用 pack/unpack 转换为非 DMA PixelMap
+   * 通过 pack/unpack 生成一张独立的可编辑 PixelMap,避免直接改动原图
    */
   private async compressImage(): Promise<void> {
     if (!this.originalPixelMap) {
@@ -111,8 +111,7 @@ export struct CompressionTab {
     let workingMap: image.PixelMap | undefined;
 
     try {
-      // DMA PixelMap 的 cloneSync() 可能返回无效 PixelMap
-      // 通过 pack/unpack 转换为非 DMA PixelMap (RGBA_8888)
+      // 通过 pack/unpack 生成一张独立的可编辑 PixelMap (RGBA_8888)
       const conversionPacker = image.createImagePacker();
       const conversionOpts: image.PackingOption = { format: 'image/jpeg', quality: 100 };
       const conversionData: ArrayBuffer = await conversionPacker.packToData(this.originalPixelMap!, conversionOpts);

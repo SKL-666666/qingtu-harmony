@@ -22,19 +22,19 @@ export class ImageConstants {
   static readonly LOG_DOMAIN: number = 0x0000;
 
   // 图像处理相关
-  static readonly DEFAULT_ZOOM_RATIO: number = 2.0;
+  // 新 API (CoreVisionKit imageSuperResolution) 固定 4 倍放大,无质量档位参数
+  static readonly SR_SCALE: number = 4.0;
   static readonly MAX_IMAGE_WIDTH: number = 4096;
   static readonly MAX_IMAGE_HEIGHT: number = 4096;
   static readonly MIN_IMAGE_WIDTH: number = 100;
   static readonly MIN_IMAGE_HEIGHT: number = 100;
 
-  // 官方分辨率约束 (https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/image-processing-arkts)
-  static readonly MIN_DIM_NORMAL: number = 32;     // NONE/LOW/MEDIUM 最小分辨率
-  static readonly MAX_DIM_NORMAL: number = 3000;   // NONE/LOW/MEDIUM 最大分辨率
-  static readonly MIN_DIM_HIGH: number = 512;      // HIGH 最小分辨率
-  static readonly MAX_DIM_HIGH: number = 2000;     // HIGH 最大分辨率
-  static readonly MAX_FIRST_PASS: number = 1500;   // 二次超分第一次输入最大边(确保第二次 x2 <= 3000)
-  static readonly QUALITY_LEVEL_HIGH: number = 3;  // 高档位质量索引
+  // 输入尺寸护栏(防 OOM) - 新 API 固定输出 4 倍尺寸
+  // 例: 4000x3000 输入 -> 16000x12000 输出,按 RGBA_8888 约 768MB,必然 OOM
+  // 限制输入最长边 1024 -> 输出最长边 4096,兼顾画质与内存安全
+  static readonly MAX_INPUT_DIM: number = 1024;
+  // 解码尺寸下限,低于此值超分无意义
+  static readonly MIN_INPUT_DIM: number = 32;
 
   // 内存管理相关
   static readonly MAX_CACHE_SIZE: number = 10;

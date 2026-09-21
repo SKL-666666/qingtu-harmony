@@ -122,23 +122,23 @@ export class FileService {
 
   /**
    * 从URI加载图片
-   * 使用 createPixelMapUsingAllocator 指定 DMA 内存类型
-   * 官方约束: videoProcessingEngine.enhanceDetail 要求 PixelMap 必须是 DMA 内存类型
-   * 参考: https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/image-allocator-type
    *
-   * 关键: 大图通过 DecodingOptions.size 缩小到 [512, 2000] 范围
-   * 这样解码器直接输出符合 HIGH 档位约束的 DMA PixelMap,无需 scaleSync
-   * (scaleSync 会破坏 DMA 内存类型)
+   * 新 API (CoreVisionKit imageSuperResolution) 无 DMA 内存要求,
+   * 使用普通 createPixelMap 解码即可。
+   *
+   * 关键: 超分固定输出 4 倍尺寸,输入过大将导致 OOM,
+   * 因此在解码阶段就把长边约束到 MAX_INPUT_DIM(1024),使输出不超过 4096 像素。
    */
   public async loadImageFromUri(uri: string, sourceType: ImageSourceType): Promise<ImageInfo> {
     PerformanceMonitor.startTimer('loadImage');
 
     let file: fileIo.File | null = null;
+    let imageSource: image.ImageSource | null = null;
     try {
       file = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY);
       LogUtils.info('打开文件成功, fd: ' + file.fd);
 
-      const imageSource: image.ImageSource = image.createImageSource(file.fd);
+      imageSource = image.createImageSource(file.fd);
       if (imageSource === null || imageSource === undefined) {
         throw new Error('createImageSource返回null');
       }
@@ -149,34 +149,29 @@ export class FileService {
       const sourceH: number = sourceInfo.size.height;
       LogUtils.info('原图尺寸: ' + sourceW + 'x' + sourceH);
 
-      // 计算解码目标尺寸: 约束在 [512, 2000] 范围(HIGH 档位要求)
-      // 大图缩小到 2000,小图保持原尺寸(但需 >= 512 才能超分)
+      // 计算解码目标尺寸: 长边约束到 MAX_INPUT_DIM (防 4x 放大后 OOM)
       const targetSize: DecodeSize = this.calculateDecodeSize(sourceW, sourceH);
       LogUtils.info('解码目标尺寸: ' + targetSize.width + 'x' + targetSize.height);
 
-      // 使用 createPixelMapUsingAllocator 指定 DMA 内存类型
-      // 通过 DecodingOptions.size 让解码器直接输出目标尺寸,保持 DMA 内存类型
+      // 通过 DecodingOptions.desiredSize 让解码器直接输出目标尺寸,避免解码后再缩放
       const decodingOptions: image.DecodingOptions = {
         desiredPixelFormat: image.PixelMapFormat.RGBA_8888,
         desiredSize: { width: targetSize.width, height: targetSize.height }
       };
-      const pixelMap: image.PixelMap = await imageSource.createPixelMapUsingAllocator(
-        decodingOptions,
-        image.AllocatorType.DMA
-      );
+      const pixelMap: image.PixelMap = await imageSource.createPixelMap(decodingOptions);
 
       if (pixelMap === null || pixelMap === undefined) {
-        throw new Error('createPixelMapUsingAllocator返回null(DMA内存创建失败)');
+        throw new Error('createPixelMap返回null');
       }
 
-      LogUtils.info('DMA类型PixelMap创建成功');
+      LogUtils.info('PixelMap 创建成功');
 
-      // 读取 EXIF 方向元数据(不旋转,只记录)
+      // 读取 EXIF 方向元数据(当前仅记录,不旋转)
       await this.applyExifOrientation(imageSource, pixelMap);
       const imgInfo: image.ImageInfo = pixelMap.getImageInfoSync();
 
       PerformanceMonitor.endTimer('loadImage');
-      LogUtils.info('图片加载完成(DMA): ' + imgInfo.size.width + 'x' + imgInfo.size.height);
+      LogUtils.info('图片加载完成: ' + imgInfo.size.width + 'x' + imgInfo.size.height);
 
       const result: ImageInfo = {
         width: imgInfo.size.width,
@@ -192,6 +187,13 @@ export class FileService {
       LogUtils.error('加载图片失败', err);
       throw new Error('加载图片失败: ' + err.message);
     } finally {
+      if (imageSource !== null) {
+        try {
+          imageSource.release();
+        } catch (e) {
+          LogUtils.warn('释放 ImageSource 失败');
+        }
+      }
       if (file !== null) {
         try {
           fileIo.closeSync(file.fd);
@@ -203,28 +205,26 @@ export class FileService {
   }
 
   /**
-   * 计算解码目标尺寸,约束在 [512, 2000] 范围(HIGH 档位要求)
-   * 大图缩小到 2000,小图保持原尺寸
+   * 计算解码目标尺寸: 长边约束到 MAX_INPUT_DIM
+   * 超分固定输出 4 倍尺寸,输入过大将导致内存溢出
    */
   private calculateDecodeSize(width: number, height: number): DecodeSize {
-    const MAX_HIGH: number = 2000;
+    const maxDim: number = ImageConstants.MAX_INPUT_DIM;
     const maxSide: number = Math.max(width, height);
-    if (maxSide <= MAX_HIGH) {
+    if (maxSide <= maxDim) {
       const same: DecodeSize = { width: width, height: height };
       return same;
     }
-    const ratio: number = MAX_HIGH / maxSide;
-    const targetW: number = Math.floor(width * ratio);
-    const targetH: number = Math.floor(height * ratio);
+    const ratio: number = maxDim / maxSide;
+    const targetW: number = Math.max(1, Math.floor(width * ratio));
+    const targetH: number = Math.max(1, Math.floor(height * ratio));
     const result: DecodeSize = { width: targetW, height: targetH };
     return result;
   }
 
   /**
    * 读取 EXIF 方向元数据
-   * 注意: 不再调用 rotateSync,因为它会破坏 DMA 内存类型
-   * DMA PixelMap 经过编辑操作后会变成 SHARE_MEMORY,导致 enhanceDetail 失败
-   * EXIF 旋转在超分后处理(如果需要的话)
+   * 当前仅记录方向,不做旋转(保持与历史版本一致的行为)
    * EXIF Orientation 值: 1=0°, 3=180°, 6=90°, 8=270°
    */
   private async applyExifOrientation(imageSource: image.ImageSource, _pixelMap: image.PixelMap): Promise<void> {
@@ -236,7 +236,7 @@ export class FileService {
       }
       const orientation: number = parseInt(orientationValue, 10);
       if (orientation !== 1) {
-        LogUtils.info('检测到 EXIF Orientation=' + orientation + '(暂不旋转,保持DMA内存类型)');
+        LogUtils.info('检测到 EXIF Orientation=' + orientation + '(暂不旋转)');
       }
     } catch (e) {
       // 部分图片无 EXIF 元数据,忽略错误

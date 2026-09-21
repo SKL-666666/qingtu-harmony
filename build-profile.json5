@@ -31,12 +31,12 @@
         "name": "release",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "C:/Users/yifen/DevEcoStudioProjects/qingtu.cer",
+          "certpath": "C:/Users/yifen/DevEcoStudioProjects/上架/qingtu.cer",
           "keyAlias": "qingtumiyin",
           "keyPassword": "00000019ADD86430617BAC341EE762EAA1B7D596D441302D02CE922D4210BCA596FD6B4F47714D7D7F",
-          "profile": "./.trae/qingtu2Release.p7b",
+          "profile": "C:/Users/yifen/DevEcoStudioProjects/上架/qingtuRelease.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "C:/Users/yifen/DevEcoStudioProjects/qingtu.p12",
+          "storeFile": "C:/Users/yifen/DevEcoStudioProjects/上架/qingtu.p12",
           "storePassword": "000000196570E020E453C5E24481E5A4A7A444587EDF5DE1369BBBB3CE4440DBCDA8CA647F2E3B2AAB"
         }
       }
@@ -45,8 +45,8 @@
       {
         "name": "default",
         "signingConfig": "release",
-        "compatibleSdkVersion": "6.1.0(23)",
-        "targetSdkVersion": "6.1.0(23)",
+        "compatibleSdkVersion": "26.0.0",
+        "targetSdkVersion": "26.0.0",
         "runtimeOS": "HarmonyOS",
         "bundleName": "app.qingtu.tool",
         "buildOption": {

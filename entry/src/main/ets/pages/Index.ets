@@ -1,7 +1,6 @@
 import { image } from '@kit.ImageKit';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { ImageConstants } from '../common/constants/ImageConstants';
 import { AppTheme } from '../common/constants/Theme';
 import { ProcessState, ProgressInfo, ImageInfo, ProcessResult } from '../common/types/ImageTypes';
 import { ErrorUtils } from '../common/utils/ErrorUtils';
@@ -217,7 +216,7 @@ struct Index {
   }
 
   aboutToDisappear(): void {
-    this.cleanupAllResources();
+    void this.cleanupAllResources();
   }
 
   // ==================== 服务初始化 ====================
@@ -232,7 +231,7 @@ struct Index {
     }
   }
 
-  private cleanupAllResources(): void {
+  private async cleanupAllResources(): Promise<void> {
     for (const status of this.imageList) {
       if (status.originalInfo?.pixelMap) {
         this.imageProcessService.releasePixelMap(status.originalInfo.pixelMap);
@@ -241,7 +240,7 @@ struct Index {
         this.imageProcessService.releasePixelMap(status.resultPixelMap);
       }
     }
-    this.imageProcessService.deinitializeEnvironment();
+    await this.imageProcessService.deinitializeEnvironment();
   }
 
   // ==================== 图片选择/管理 ====================
@@ -249,20 +248,19 @@ struct Index {
     try {
       const images: ImageInfo[] = await this.fileService.selectMultipleImagesFromGallery();
       if (images.length > 0) {
-        this.cleanupAllResources();
+        await this.cleanupAllResources();
         this.imageList = [];
 
-        // 严格检查 HIGH 档位分辨率约束 [512, 2000]
+        // 新 API (imageSuperResolution) 无分辨率约束,仅过滤 PixelMap 无效的图片
         const validImages: ImageInfo[] = [];
-        const rejectedImages: string[] = [];
+        let invalidCount: number = 0;
         for (const img of images) {
-          if (img.pixelMap) {
-            const check = this.imageProcessService.canProcess(img.pixelMap);
-            if (check.canProcess) {
-              validImages.push(img);
-            } else {
-              rejectedImages.push(img.width + '×' + img.height + ': ' + check.reason);
-              // 拒绝的图片释放 PixelMap
+          if (img.pixelMap && this.imageProcessService.canProcess(img.pixelMap).canProcess) {
+            validImages.push(img);
+          } else {
+            invalidCount++;
+            if (img.pixelMap) {
+              // 无效图片释放 PixelMap
               this.imageProcessService.releasePixelMap(img.pixelMap);
             }
           }
@@ -276,9 +274,9 @@ struct Index {
 
         LogUtils.info('选择了 ' + images.length + ' 张图片,合格 ' + validImages.length + ' 张');
 
-        if (rejectedImages.length > 0) {
+        if (invalidCount > 0) {
           ErrorUtils.showStringErrorToast(
-            this.getUIContext(), '已拒绝 ' + rejectedImages.length + ' 张(分辨率须在512~2000之间)'
+            this.getUIContext(), '已跳过 ' + invalidCount + ' 张无法读取的图片'
           );
         }
 
@@ -308,8 +306,8 @@ struct Index {
     LogUtils.info('移除了第 ' + (index + 1) + ' 张图片');
   }
 
-  private handleClearAll(): void {
-    this.cleanupAllResources();
+  private async handleClearAll(): Promise<void> {
+    await this.cleanupAllResources();
     this.imageList = [];
     this.processState = ProcessState.IDLE;
     this.progressInfo = { progress: 0, stage: '准备中', isCancellable: true };
@@ -331,10 +329,10 @@ struct Index {
       return;
     }
 
-    // 分辨率提示：底部 toast 提醒
+    // 处理能力提示：底部 toast 提醒
     try {
       this.getUIContext().getPromptAction().showToast({
-        message: '提示：图片分辨率建议在 512-2000 像素之间以获得最佳超分效果',
+        message: '提示：超分将把图片放大 4 倍（最长边上限 4096 像素）',
         duration: 3000
       });
     } catch (error) {
@@ -357,8 +355,6 @@ struct Index {
       try {
         const result: ProcessResult = await this.imageProcessService.enhanceDetailAsync(
           status.originalInfo.pixelMap,
-          ImageConstants.QUALITY_LEVEL_HIGH,
-          ImageConstants.DEFAULT_ZOOM_RATIO,
           (progress: ProgressInfo) => {
             const totalProgress: number = Math.floor(
               ((processedCount * 100) + progress.progress) / validCount
@@ -414,9 +410,7 @@ struct Index {
 
     try {
       const result: ProcessResult = await this.imageProcessService.enhanceDetailSingle(
-        status.originalInfo.pixelMap,
-        ImageConstants.QUALITY_LEVEL_HIGH,
-        ImageConstants.DEFAULT_ZOOM_RATIO
+        status.originalInfo.pixelMap
       );
 
       if (result.success && result.pixelMap) {
@@ -561,7 +555,7 @@ struct Index {
         Text('选择图片')
           .fontSize(14)
           .fontColor(AppTheme.TEXT_TERTIARY)
-        Text('最多 9 张 · HIGH 超分增强')
+        Text('最多 9 张 · 4x 超分增强')
           .fontSize(11)
           .fontColor(AppTheme.TEXT_TERTIARY)
       }
@@ -616,7 +610,7 @@ struct Index {
       .border({ width: 0.5, color: AppTheme.BORDER_GLASS })
       .borderRadius(AppTheme.BUTTON_HEIGHT_SMALL / 2)
       .enabled(this.imageList.length > 0 && this.processState !== ProcessState.PROCESSING)
-      .onClick(() => this.handleClearAll())
+      .onClick(() => { void this.handleClearAll(); })
   }
 
   /**
@@ -807,7 +801,7 @@ struct Index {
             .fontColor(AppTheme.TEXT_PRIMARY)
 
           Column({ space: 8 }) {
-            Text('本应用支持批量图片超分辨率增强,基于官方 videoProcessingEngine。')
+            Text('本应用支持批量图片超分辨率增强,基于官方 Core Vision Kit 图像超分能力。')
               .fontSize(13)
               .fontColor(AppTheme.TEXT_SECONDARY)
           }
@@ -838,13 +832,13 @@ struct Index {
               .fontSize(14)
               .fontWeight(FontWeight.Medium)
               .fontColor(AppTheme.TEXT_PRIMARY)
-            Text('• 使用 HIGH 档位增强细节并放大')
+            Text('• 基于 Core Vision Kit 图像超分重建细节')
               .fontSize(13)
               .fontColor(AppTheme.TEXT_SECONDARY)
-            Text('• 放大 2 倍,输出上限 2000 像素')
+            Text('• 固定放大 4 倍,输出最长边上限 4096 像素')
               .fontSize(13)
               .fontColor(AppTheme.TEXT_SECONDARY)
-            Text('• 分辨率须在 512~2000 之间,不符合将拒绝')
+            Text('• 超大图会先缩小到 1024 像素再超分')
               .fontSize(13)
               .fontColor(AppTheme.TEXT_SECONDARY)
           }

@@ -13,20 +13,13 @@
  * limitations under the License.
  */
 
-import { image, videoProcessingEngine } from '@kit.ImageKit';
+import { image } from '@kit.ImageKit';
+import { imageSuperResolution, visionBase } from '@kit.CoreVisionKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { ProcessResult, ProgressInfo } from '../common/types/ImageTypes';
 import { ErrorCode, ImageConstants } from '../common/constants/ImageConstants';
 import { ErrorUtils } from '../common/utils/ErrorUtils';
 import { LogUtils, PerformanceMonitor } from '../common/utils/LogUtils';
-
-/**
- * 分辨率校验结果
- */
-interface ValidationResult {
-  valid: boolean;
-  reason: string;
-}
 
 /**
  * 可处理检查结果
@@ -37,28 +30,21 @@ interface CanProcessResult {
 }
 
 /**
- * 目标尺寸
- */
-interface TargetSize {
-  width: number;
-  height: number;
-}
-
-/**
- * 图像处理服务 - 严格遵循官方规范
- * 参考: https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/image-processing-arkts
+ * 图像处理服务 - 基于 Core Vision Kit 图像超分能力
+ * 参考: https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/core-vision-image-super-resolution
  *
  * 关键事实(基于官方文档):
- * 1. videoProcessingEngine API 从 API 18 (HarmonyOS 5.1.0) 起支持
- * 2. HIGH 档位输入/输出宽高均须在 [512, 2000]
- * 3. 必须先调用 initializeEnvironment(),再 create(),再 enhanceDetail()
- * 4. create() 失败返回 null,必须判空
- * 5. enhanceDetail 有两个重载: (source, width, height, level) 和 (source, scale, level)
- * 6. 失败会抛异常(错误码 801/29200001-29200009),不会 silent 返回原图
+ * 1. imageSuperResolution 从 API 26 (HarmonyOS 26.0.0) 起支持,属 @kit.CoreVisionKit
+ * 2. 调用链路: ImageSRAnalyzer.create() -> process() -> destroy()
+ * 3. 固定放大 4 倍(输出宽高均为输入的 4 倍),无质量档位/倍率参数
+ * 4. 无 [512,2000] 分辨率约束,也无需 DMA 内存类型(普通 PixelMap 即可)
+ * 5. process 仅支持单张图片,批量需自行循环调用
+ * 6. 失败抛异常,错误码统一为 1018700001 (Service exception)
  */
 export class ImageProcessService {
   private static instance: ImageProcessService;
-  private isInitialized: boolean = false;
+  private analyzer: imageSuperResolution.ImageSRAnalyzer | null = null;
+  private initPromise: Promise<void> | null = null;
   private cancelFlag: boolean = false;
 
   private constructor() {}
@@ -71,74 +57,73 @@ export class ImageProcessService {
   }
 
   /**
-   * 初始化环境 - 必须在使用前调用
-   * 官方链路: initializeEnvironment() → create() → enhanceDetail()
+   * 初始化超分分析器 - 必须在使用前调用
+   * 幂等且并发安全: 重复调用不会重复创建实例
    */
   public async initializeEnvironment(): Promise<void> {
-    if (this.isInitialized) {
+    if (this.analyzer !== null) {
       return;
     }
+    if (this.initPromise !== null) {
+      await this.initPromise;
+      return;
+    }
+    this.initPromise = this.doInitialize();
     try {
-      LogUtils.info('开始初始化 videoProcessingEngine 环境...');
-      await videoProcessingEngine.initializeEnvironment();
-      this.isInitialized = true;
-      LogUtils.info('VideoProcessingEngine 环境初始化成功');
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
+    }
+  }
+
+  private async doInitialize(): Promise<void> {
+    try {
+      LogUtils.info('开始创建 ImageSRAnalyzer...');
+      const analyzer: imageSuperResolution.ImageSRAnalyzer =
+        await imageSuperResolution.ImageSRAnalyzer.create();
+      if (analyzer === null || analyzer === undefined) {
+        throw new Error('ImageSRAnalyzer.create() 返回空');
+      }
+      this.analyzer = analyzer;
+      LogUtils.info('ImageSRAnalyzer 创建成功');
     } catch (e) {
-      const err: Error = e instanceof Error ? e : new Error(String(e));
       const code: number = (e as BusinessError)?.code ?? -1;
-      LogUtils.error('环境初始化失败 [code=' + code + ']: ' + err.message);
-      if (code === 801) {
-        throw new Error('设备不支持超分能力(API 18+ / HarmonyOS 5.1.0+)');
+      const err: Error = e instanceof Error ? e : new Error(String(e));
+      LogUtils.error('超分服务初始化失败 [code=' + code + ']: ' + err.message);
+      if (code === 1018700001) {
+        throw new Error('超分服务异常,请确认设备支持图像超分能力(HarmonyOS 26.0.0+)');
       }
       throw err;
     }
   }
 
   /**
-   * 反初始化环境 - 释放资源
+   * 释放超分分析器
    */
-  public deinitializeEnvironment(): void {
-    if (!this.isInitialized) {
+  public async deinitializeEnvironment(): Promise<void> {
+    const analyzer: imageSuperResolution.ImageSRAnalyzer | null = this.analyzer;
+    this.analyzer = null;
+    if (analyzer === null) {
       return;
     }
     try {
-      videoProcessingEngine.deinitializeEnvironment();
-      this.isInitialized = false;
-      LogUtils.info('VideoProcessingEngine 环境已释放');
-    } catch (_e) {
-      LogUtils.warn('环境释放失败: ' + String(_e));
+      await analyzer.destroy();
+      LogUtils.info('ImageSRAnalyzer 已释放');
+    } catch (e) {
+      LogUtils.warn('释放 ImageSRAnalyzer 失败: ' + String(e));
     }
   }
 
   /**
-   * 检查分辨率是否满足 HIGH 档位约束 [512, 2000]
-   * 官方约束: HIGH 档位清晰度增强场景,输入/输出宽高均须在 [512, 2000]
+   * 服务是否已就绪
    */
-  public validateHighResolution(width: number, height: number): ValidationResult {
-    if (width < ImageConstants.MIN_DIM_HIGH) {
-      const result: ValidationResult = { valid: false, reason: '宽度 ' + width + ' < ' + ImageConstants.MIN_DIM_HIGH + ',不满足 HIGH 档位下限' };
-      return result;
-    }
-    if (height < ImageConstants.MIN_DIM_HIGH) {
-      const result: ValidationResult = { valid: false, reason: '高度 ' + height + ' < ' + ImageConstants.MIN_DIM_HIGH + ',不满足 HIGH 档位下限' };
-      return result;
-    }
-    if (width > ImageConstants.MAX_DIM_HIGH) {
-      const result: ValidationResult = { valid: false, reason: '宽度 ' + width + ' > ' + ImageConstants.MAX_DIM_HIGH + ',不满足 HIGH 档位上限' };
-      return result;
-    }
-    if (height > ImageConstants.MAX_DIM_HIGH) {
-      const result: ValidationResult = { valid: false, reason: '高度 ' + height + ' > ' + ImageConstants.MAX_DIM_HIGH + ',不满足 HIGH 档位上限' };
-      return result;
-    }
-    const ok: ValidationResult = { valid: true, reason: '' };
-    return ok;
+  public isReady(): boolean {
+    return this.analyzer !== null;
   }
 
   /**
-   * 检查是否可处理 - 检查 HIGH 档位约束 [512, 2000]
-   * 大图在加载时已通过 DecodingOptions.size 缩小到 2000 以内
-   * 这里只检查最终解码后的尺寸是否满足约束
+   * 检查图片是否可处理
+   * 新 API 无分辨率约束,仅校验 PixelMap 有效性与尺寸合理性
    */
   public canProcess(sourcePixelMap: image.PixelMap | undefined): CanProcessResult {
     if (!sourcePixelMap) {
@@ -149,9 +134,11 @@ export class ImageProcessService {
       const imageInfo: image.ImageInfo = sourcePixelMap.getImageInfoSync();
       const width: number = imageInfo.size.width;
       const height: number = imageInfo.size.height;
-      const check: ValidationResult = this.validateHighResolution(width, height);
-      if (!check.valid) {
-        const fail: CanProcessResult = { canProcess: false, reason: check.reason };
+      if (width < ImageConstants.MIN_INPUT_DIM || height < ImageConstants.MIN_INPUT_DIM) {
+        const fail: CanProcessResult = {
+          canProcess: false,
+          reason: '图片尺寸 ' + width + 'x' + height + ' 过小'
+        };
         return fail;
       }
       const ok: CanProcessResult = { canProcess: true, reason: '' };
@@ -165,133 +152,95 @@ export class ImageProcessService {
   }
 
   /**
-   * 异步图像增强处理 - 单次 HIGH 超分
+   * 异步图像超分处理 - 固定 4 倍放大
    *
-   * 严格遵循官方规范:
-   * 1. 校验输入分辨率必须在 [512, 2000] 范围内,不符合直接拒绝
-   * 2. 调用 initializeEnvironment() 确保环境已初始化
-   * 3. 调用 create() 并检查返回是否为 null
-   * 4. 调用 enhanceDetail() 并捕获错误码
-   * 5. 校验输出 PixelMap 尺寸是否等于目标尺寸
+   * 流程:
+   * 1. 确保 ImageSRAnalyzer 已创建
+   * 2. 构造 visionBase.Request(单张 PixelMap)
+   * 3. 调用 analyzer.process() 获取 4 倍放大结果
+   * 4. 校验返回 PixelMap 有效性
    *
-   * 不做预处理缩小,不符合要求的图片直接拒绝
+   * 注意: process 不可中断,取消操作只能等其返回后丢弃结果
    */
   public async enhanceDetailAsync(
     sourcePixelMap: image.PixelMap,
-    _qualityLevel: number,
-    zoomRatio: number = 2.0,
     progressCallback?: (progress: ProgressInfo) => void
   ): Promise<ProcessResult> {
     PerformanceMonitor.startTimer('enhanceDetail');
     this.cancelFlag = false;
 
     try {
-      // 步骤1: 读取原图尺寸
-      const imageInfo: image.ImageInfo = sourcePixelMap.getImageInfoSync();
-      const sourceWidth: number = imageInfo.size.width;
-      const sourceHeight: number = imageInfo.size.height;
-
-      LogUtils.info('超分输入: ' + sourceWidth + 'x' + sourceHeight + ', zoomRatio=' + zoomRatio);
-
-      // 步骤2: 严格校验输入分辨率(不缩小,直接拒绝)
-      const inputCheck: ValidationResult = this.validateHighResolution(sourceWidth, sourceHeight);
-      if (!inputCheck.valid) {
-        LogUtils.error('超分拒绝: 输入' + inputCheck.reason);
-        return {
-          success: false,
-          error: ErrorUtils.createError(ErrorCode.INVALID_PARAMETER, '分辨率不符合 HIGH 档位要求: ' + inputCheck.reason)
-        };
-      }
-
-      // 步骤3: 计算放大目标尺寸(2x,约束在 [512, 2000])
-      const targetSize: TargetSize = this.calculateTargetSize(sourceWidth, sourceHeight, zoomRatio);
-      const finalWidth: number = targetSize.width;
-      const finalHeight: number = targetSize.height;
-
-      // 校验输出分辨率也在 [512, 2000]
-      const outputCheck: ValidationResult = this.validateHighResolution(finalWidth, finalHeight);
-      if (!outputCheck.valid) {
-        LogUtils.error('超分拒绝: 输出' + outputCheck.reason);
-        return {
-          success: false,
-          error: ErrorUtils.createError(ErrorCode.INVALID_PARAMETER, '输出分辨率不符合 HIGH 档位要求: ' + outputCheck.reason)
-        };
-      }
-
-      LogUtils.info('超分计划: ' + sourceWidth + 'x' + sourceHeight + ' -> ' + finalWidth + 'x' + finalHeight);
-
-      // 步骤4: 确保环境已初始化
-      if (!this.isInitialized) {
-        LogUtils.info('环境未初始化,先初始化...');
+      // 步骤1: 确保分析器已就绪
+      if (this.analyzer === null) {
+        this.updateProgress(progressCallback, 5, '初始化超分服务', true);
         await this.initializeEnvironment();
       }
-
-      // 进度阶段1: 准备 (0-10%)
-      this.updateProgress(progressCallback, 5, '初始化处理器', true);
-      await this.delay(50);
+      const analyzer: imageSuperResolution.ImageSRAnalyzer | null = this.analyzer;
+      if (analyzer === null) {
+        return {
+          success: false,
+          error: ErrorUtils.createError(ErrorCode.IMAGE_PROCESS_ERROR, '超分服务未初始化')
+        };
+      }
 
       if (this.cancelFlag) {
         return this.createCancelledResult();
       }
 
-      // 步骤5: 创建处理器 (create() 失败返回 null,必须判空)
-      this.updateProgress(progressCallback, 10, '创建处理器', true);
-      LogUtils.info('调用 videoProcessingEngine.create()...');
-      const imageProcessor: videoProcessingEngine.ImageProcessor | null = videoProcessingEngine.create();
+      // 步骤2: 记录输入尺寸(4 倍放大由 API 内部完成)
+      const sourceInfo: image.ImageInfo = sourcePixelMap.getImageInfoSync();
+      const sourceWidth: number = sourceInfo.size.width;
+      const sourceHeight: number = sourceInfo.size.height;
+      LogUtils.info('超分输入: ' + sourceWidth + 'x' + sourceHeight
+        + ', 预期输出: ' + (sourceWidth * ImageConstants.SR_SCALE) + 'x'
+        + (sourceHeight * ImageConstants.SR_SCALE));
 
-      if (imageProcessor === null || imageProcessor === undefined) {
-        LogUtils.error('create() 返回 null,实例数可能超上限(29200003)或环境未初始化(29200006)');
-        return {
-          success: false,
-          error: ErrorUtils.createError(ErrorCode.IMAGE_PROCESS_ERROR, '创建处理器失败(create 返回 null)')
-        };
-      }
+      this.updateProgress(progressCallback, 15, '正在超分处理...', true);
 
-      LogUtils.info('create() 成功,开始调用 enhanceDetail(HIGH)...');
-
-      // 步骤6: 调用 enhanceDetail (HIGH 档位)
-      const highLevel: videoProcessingEngine.QualityLevel = videoProcessingEngine.QualityLevel.HIGH;
-
-      // 单次 HIGH 超分 (10-90%)
-      let currentProgress: number = 10;
+      // 步骤3: 调用超分 (官方无真实进度回调,以下为 UX 假进度)
+      let currentProgress: number = 15;
       const progressInterval = setInterval(() => {
         if (currentProgress < 85 && !this.cancelFlag) {
           currentProgress += 5;
-          this.updateProgress(progressCallback, currentProgress, '正在增强图像(HIGH)...', true);
+          this.updateProgress(progressCallback, currentProgress, '正在超分处理...', true);
         }
       }, 300);
 
       try {
-        const result: image.PixelMap = await imageProcessor.enhanceDetail(
-          sourcePixelMap, finalWidth, finalHeight, highLevel);
+        const imageData: visionBase.ImageData = { pixelMap: sourcePixelMap };
+        const request: visionBase.Request = { inputData: imageData };
+        const response: imageSuperResolution.ISPResponse = await analyzer.process(request);
         clearInterval(progressInterval);
 
         if (this.cancelFlag) {
-          if (result) {
-            result.release();
+          if (response.pixelMap) {
+            this.releasePixelMap(response.pixelMap);
           }
           return this.createCancelledResult();
         }
 
-        // 步骤7: 校验输出 - 确认真的处理了
-        const resultInfo: image.ImageInfo = result.getImageInfoSync();
-        const resultWidth: number = resultInfo.size.width;
-        const resultHeight: number = resultInfo.size.height;
-
-        LogUtils.info('enhanceDetail 返回: ' + resultWidth + 'x' + resultHeight + ' (期望: ' + finalWidth + 'x' + finalHeight + ')');
-
-        if (resultWidth !== finalWidth || resultHeight !== finalHeight) {
-          LogUtils.warn('警告: 输出尺寸与期望不一致,但仍返回结果');
+        if (response.pixelMap === null || response.pixelMap === undefined) {
+          LogUtils.error('process() 返回空 PixelMap');
+          return {
+            success: false,
+            error: ErrorUtils.createError(ErrorCode.IMAGE_PROCESS_ERROR, '超分返回空图片')
+          };
         }
 
+        // 步骤4: 记录输出尺寸
+        const resultInfo: image.ImageInfo = response.pixelMap.getImageInfoSync();
+        const resultWidth: number = resultInfo.size.width;
+        const resultHeight: number = resultInfo.size.height;
         const duration: number = PerformanceMonitor.endTimer('enhanceDetail');
-        LogUtils.info('超分完成, 耗时: ' + duration + 'ms');
 
+        LogUtils.info('超分完成: ' + resultWidth + 'x' + resultHeight
+          + ' (期望 ' + (sourceWidth * ImageConstants.SR_SCALE) + 'x'
+          + (sourceHeight * ImageConstants.SR_SCALE) + '), 耗时: ' + duration + 'ms');
         this.updateProgress(progressCallback, 100, '处理完成', false);
 
         const processResult: ProcessResult = {
           success: true,
-          pixelMap: result,
+          pixelMap: response.pixelMap,
           width: resultWidth,
           height: resultHeight,
           duration: duration
@@ -302,34 +251,23 @@ export class ImageProcessService {
         const businessError: BusinessError = e as BusinessError;
         const code: number = businessError?.code ?? -1;
         const msg: string = businessError?.message ?? String(e);
-        LogUtils.error('enhanceDetail 调用失败 [code=' + code + ']: ' + msg);
+        LogUtils.error('超分调用失败 [code=' + code + ']: ' + msg);
 
         let userMsg: string;
-        if (code === 801) {
-          userMsg = '设备不支持超分能力(需 HarmonyOS 5.1.0+)';
-        } else if (code === 29200009) {
-          userMsg = '参数无效(分辨率越界或档位错误)';
-        } else if (code === 29200006) {
-          userMsg = '操作不被允许(未初始化)';
-        } else if (code === 29200002) {
-          userMsg = 'GPU 环境初始化失败';
-        } else if (code === 29200007) {
-          userMsg = '内存不足';
+        if (code === 1018700001) {
+          userMsg = '超分服务异常,请确认设备支持该能力(HarmonyOS 26.0.0+)';
         } else {
           userMsg = '超分失败[' + code + ']: ' + msg;
         }
-
         return {
           success: false,
           error: ErrorUtils.createError(ErrorCode.IMAGE_PROCESS_ERROR, userMsg)
         };
       }
-
     } catch (error) {
       PerformanceMonitor.endTimer('enhanceDetail');
       const err: Error = error instanceof Error ? error : new Error(String(error));
       LogUtils.error('超分异常', err);
-
       return {
         success: false,
         error: ErrorUtils.createError(ErrorCode.IMAGE_PROCESS_ERROR, err.message)
@@ -338,33 +276,12 @@ export class ImageProcessService {
   }
 
   /**
-   * 计算 2x 放大目标尺寸,约束在 [512, 2000]
-   * 如果 2x 放大后超过 2000,则输出 = 2000(不放大,只增强)
+   * 单图处理 - 与 enhanceDetailAsync 等价(保持调用方兼容)
    */
-  private calculateTargetSize(width: number, height: number, zoomRatio: number): TargetSize {
-    const MAX_HIGH: number = ImageConstants.MAX_DIM_HIGH; // 2000
-    const MIN_HIGH: number = ImageConstants.MIN_DIM_HIGH; // 512
-
-    let targetW: number = Math.floor(width * zoomRatio);
-    let targetH: number = Math.floor(height * zoomRatio);
-
-    // 如果放大后超过 2000,缩到 2000
-    const maxSide: number = Math.max(targetW, targetH);
-    if (maxSide > MAX_HIGH) {
-      const ratio: number = MAX_HIGH / maxSide;
-      targetW = Math.floor(targetW * ratio);
-      targetH = Math.floor(targetH * ratio);
-    }
-
-    // 硬约束
-    if (targetW > MAX_HIGH) targetW = MAX_HIGH;
-    if (targetH > MAX_HIGH) targetH = MAX_HIGH;
-    if (targetW < MIN_HIGH) targetW = MIN_HIGH;
-    if (targetH < MIN_HIGH) targetH = MIN_HIGH;
-
-    LogUtils.info('目标尺寸: ' + width + 'x' + height + ' * ' + zoomRatio + ' -> ' + targetW + 'x' + targetH);
-    const result: TargetSize = { width: targetW, height: targetH };
-    return result;
+  public async enhanceDetailSingle(
+    sourcePixelMap: image.PixelMap
+  ): Promise<ProcessResult> {
+    return this.enhanceDetailAsync(sourcePixelMap);
   }
 
   /**
@@ -397,33 +314,12 @@ export class ImageProcessService {
   }
 
   /**
-   * 延迟函数
-   */
-  private delay(ms: number): Promise<void> {
-    return new Promise<void>((resolve: (value: void) => void) => {
-      setTimeout(() => {
-        resolve();
-      }, ms);
-    });
-  }
-
-  /**
    * 取消处理
+   * 注意: analyzer.process 不可中断,此标志仅用于返回后丢弃结果
    */
   public cancelProcess(): void {
     this.cancelFlag = true;
     LogUtils.info('用户取消超分处理');
-  }
-
-  /**
-   * 单图重试处理 - 简化版,无进度模拟
-   */
-  public async enhanceDetailSingle(
-    sourcePixelMap: image.PixelMap,
-    qualityLevel: number,
-    zoomRatio: number = ImageConstants.DEFAULT_ZOOM_RATIO
-  ): Promise<ProcessResult> {
-    return this.enhanceDetailAsync(sourcePixelMap, qualityLevel, zoomRatio);
   }
 
   /**

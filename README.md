@@ -3,7 +3,7 @@
 > 基于 HarmonyOS 的 AI 图像处理应用：AI 超分辨率增强 + 智能压缩 + 专业相机
 > An AI-powered image processing app for HarmonyOS: AI Super-Resolution + Smart Compression + Pro Camera
 
-[![HarmonyOS](https://img.shields.io/badge/HarmonyOS-5.0.5+-000000?logo=huawei&logoColor=red)](https://developer.huawei.com/consumer/cn/harmonyos)
+[![HarmonyOS](https://img.shields.io/badge/HarmonyOS-26.0.0+-000000?logo=huawei&logoColor=red)](https://developer.huawei.com/consumer/cn/harmonyos)
 [![ArkTS](https://img.shields.io/badge/Language-ArkTS-blue)](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-overview)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/SKL-666666/qingtu-harmony)](https://github.com/SKL-666666/qingtu-harmony/releases)
@@ -20,7 +20,7 @@
 
 | 功能 Feature | 说明 Description |
 |---|---|
-| 🖼️ **AI 超分辨率** AI Super-Resolution | 基于 `ImageProcessing` 的细节增强 + 2 倍真实放大，输出最高 2000px 高清图。Detail enhancement + genuine 2x upscaling, up to 2000px output. |
+| 🖼️ **AI 超分辨率** AI Super-Resolution | 基于 Core Vision Kit 图像超分重建细节，固定 4 倍放大，输出最长边 4096px。Detail reconstruction via Core Vision Kit image super-resolution with fixed 4x upscaling, up to 4096px on the long edge. |
 | 📦 **智能压缩** Smart Compression | 无损感知压缩，显著减小体积的同时保持视觉质量。Perceptually lossless compression that keeps visual quality while shrinking file size. |
 | 📷 **专业相机** Pro Camera | 变焦（1x/5x/10x）、拍照后滤镜、双段拍照、延时拍照、网格线、水平仪、闪光灯、录像防抖。Zoom (1x/5x/10x), post-capture filters, dual-shot, self-timer, grid, level indicator, flash, video stabilization. |
 | 🔍 **画质对比** Before/After Compare | 分割线滑动手势，直观对比增强前后效果。Drag-to-compare slider for a direct before/after view. |
@@ -37,9 +37,9 @@
 
 ## 运行环境 / Requirements
 
-- **HarmonyOS**: 6.1 Release 及以上（API 23+）/ 6.1 Release or later (API 23+)
+- **HarmonyOS**: 26.0.0 及以上（API 26+）/ 26.0.0 or later (API 26+)
 - **DevEco Studio**: 6.1 Release 及以上 / 6.1 Release or later
-- **HarmonyOS SDK**: 6.1 Release 及以上 / 6.1 Release or later
+- **HarmonyOS SDK**: 26.0.0 及以上 / 26.0.0 or later
 - **设备类型 / Device types**: 手机 Phone / 平板 Tablet
 
 ---
@@ -50,11 +50,11 @@
 
 从 [Releases](https://github.com/SKL-666666/qingtu-harmony/releases) 页面下载最新的 `.hap` 安装包：
 
-- `qingtu-v1.0.3-signed.hap` — 已签名包，可直接安装到设备 / Signed package, installable directly on device
-- `qingtu-v1.0.3-unsigned.hap` — 未签名包，需配合本地签名工具使用 / Unsigned package, requires local signing
+- `qingtu-v1.1.0-signed.hap` — 已签名包，可直接安装到设备 / Signed package, installable directly on device
+- `qingtu-v1.1.0-unsigned.hap` — 未签名包，需配合本地签名工具使用 / Unsigned package, requires local signing
 
 ```bash
-hdc install qingtu-v1.0.3-signed.hap
+hdc install qingtu-v1.1.0-signed.hap
 ```
 
 ### 从源码构建 / Build from Source
@@ -100,8 +100,8 @@ hdc install qingtu-v1.0.3-signed.hap
 
 ## 技术亮点 / Technical Highlights
 
-- **双通道超分流程**：先进行同尺寸细节增强（HIGH），再进行 2 倍放大（MEDIUM），保证画质与分辨率兼顾。Two-pass super-resolution: same-size detail enhancement (HIGH) then 2x scaling (MEDIUM) for quality + resolution.
-- **DMA 内存优化**：解码直出 DMA PixelMap，异步像素读写避免 UI 卡顿。DMA memory-optimized decode with async pixel I/O to avoid UI jank.
+- **Core Vision 超分流程**：`ImageSRAnalyzer.create()` → `process()` → `destroy()`，固定 4 倍放大，无需 DMA 内存与分辨率约束。Core Vision super-resolution pipeline: `create()` → `process()` → `destroy()`, fixed 4x upscaling with no DMA or resolution constraints.
+- **内存护栏**：超分前将输入长边约束到 1024px，避免 4 倍放大后内存溢出（输出最长边 4096px）。Memory guard: input long edge is capped at 1024px to avoid OOM after 4x upscaling (output up to 4096px).
 - **相机资源管理**：页面不可见时自动停止相机与动画，节省系统资源。Camera session and animations auto-stop when the page is not visible.
 - **主题跟随系统**：`EnvironmentCallback` 监听系统深浅色切换，全量 UI 适配。System theme detection via `EnvironmentCallback` with full UI adaptation.
 
@@ -113,7 +113,9 @@ hdc install qingtu-v1.0.3-signed.hap
 |---|---|
 | `ohos.permission.CAMERA` | 相机拍摄 / Camera capture |
 | `ohos.permission.ACCELEROMETER` | 检测设备方向 / Device orientation detection |
-| `WRITE_IMAGEVIDEO` (system_grant, ACL) | 保存图片至系统相册 / Save images to system gallery |
+
+> 保存图片使用系统安全组件 `SaveButton`，无需申请存储权限。
+> Saving uses the `SaveButton` security component, so no storage permission is required.
 
 ---
 
